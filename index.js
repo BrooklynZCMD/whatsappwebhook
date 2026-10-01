@@ -1,81 +1,76 @@
-const { makeWASocket, DisconnectReason, useMultiFileAuthState } = require('@whiskeysockets/baileys');
 const express = require('express');
-
 const app = express();
+
 app.use(express.json());
 
-const PORT = process.env.PORT || 3000;
-const WEBHOOK_URL = process.env.WEBHOOK_URL;
+app.post('/webhook', (req, res) => {
+  try {
+    const payload = req.body;
 
-async function startBot() {
-  const { state, saveCreds } = await useMultiFileAuthState('./auth_info');
+    // 1. Responder inmediatamente 200 OK a WhatsApp/Engine para evitar reintentos duplicados
+    res.status(200).send({ status: 'success' });
 
-  const sock = makeWASocket({
-    auth: state,
-    printQRInTerminal: true,
-  });
-
-  sock.ev.on('creds.update', saveCreds);
-
-  sock.ev.on('connection.update', (update) => {
-    const { connection, lastDisconnect, qr } = update;
-    
-    if (qr) {
-      console.log('📱 ABRE ESTA URL EN TU NAVEGADOR PARA ESCANEAR EL QR:');
-      console.log(`https://api.qrserver.com/v1/create-qr-code/?data=${encodeURIComponent(qr)}`);
+    // 2. Validar que la carga útil exista
+    if (!payload || typeof payload !== 'object') {
+      console.log('Payload no válido o vacío');
+      return;
     }
 
-    if (connection === 'close') {
-      const shouldReconnect = lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
-      if (shouldReconnect) startBot();
-    } else if (connection === 'open') {
-      console.log('🚀 ¡WhatsApp conectado exitosamente!');
+    // 3. Ignorar eventos sin texto o vacíos (evita procesar pings/ack sin mensaje)
+    const text = payload.text ? payload.text.trim() : '';
+    if (!text) {
+      console.log('Mensaje ignorado: texto vacío o evento de sistema.');
+      return;
     }
-  });
 
-  sock.ev.on('messages.upsert', async (m) => {
-    if (m.type === 'notify') {
-      for (const msg of m.messages) {
-        if (msg.key.fromMe) continue;
+    // 4. Extracción segura de ID (evita "Cannot read properties of undefined (reading 'id')")
+    const messageId = payload.id 
+      || payload.key?.id 
+      || payload.message?.id 
+      || `msg_${Date.now()}`;
 
-        const payload = {
-          from: msg.key.remoteJid,
-          name: msg.pushName || 'Contacto',
-          text: msg.message?.conversation || msg.message?.extendedTextMessage?.text || '',
-          timestamp: msg.messageTimestamp,
-        };
-
-        if (WEBHOOK_URL) {
-          try {
-            await fetch(WEBHOOK_URL, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify(payload),
-            });
-            console.log('Mensaje reenviado al Webhook:', payload.from);
-          } catch (err) {
-            console.error('Error reenviando al Webhook:', err.message);
-          }
-        }
-      }
+    // 5. Normalizar el Remitente (Manejo de @lid y números tradicionales)
+    const from = payload.from || payload.key?.remoteJid || '';
+    if (!from) {
+      console.log('Mensaje ignorado: remitente no encontrado.');
+      return;
     }
-  });
 
-  app.post('/send-message', async (req, res) => {
-    const { to, message } = req.body;
-    try {
-      const formattedTo = to.includes('@s.whatsapp.net') ? to : `${to}@s.whatsapp.net`;
-      await sock.sendMessage(formattedTo, { text: message });
-      res.json({ status: 'sent', to, message });
-    } catch (e) {
-      res.status(500).json({ error: e.message });
+    // 6. Normalizar el Timestamp (Manejo de enteros y objetos protobuf { low, high })
+    let timestamp = payload.timestamp;
+    if (typeof timestamp === 'object' && timestamp !== null) {
+      timestamp = timestamp.low;
     }
-  });
+    timestamp = timestamp || Math.floor(Date.now() / 1000);
+
+    // 7. Estructura limpia y segura para la lógica del bot
+    const safeData = {
+      id: messageId,
+      from: from,
+      name: payload.name && payload.name !== '-' ? payload.name : 'Usuario',
+      text: text,
+      timestamp: timestamp
+    };
+
+    console.log('Procesando mensaje válido:', safeData);
+
+    // 8. Lógica de respuesta del Bot
+    procesarRespuestaBot(safeData);
+
+  } catch (error) {
+    console.error('Error procesando el webhook:', error.message);
+  }
+});
+
+function procesarRespuestaBot(data) {
+  // Lógica de respuesta según el texto
+  if (data.text.toLowerCase() === 'hola') {
+    console.log(`Enviando respuesta a ${data.from}: ¡Hola! ¿En qué puedo ayudarte?`);
+    // Llama aquí a tu función de envío de mensajes (p. ej. engine.sendMessage)
+  }
 }
 
-app.get('/', (req, res) => res.send('Engine de WhatsApp Activo'));
-
+const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`Servidor en puerto ${PORT}`);
-  startBot();
+  console.log(`Servidor de Webhook escuchando en el puerto ${PORT}`);
 });
