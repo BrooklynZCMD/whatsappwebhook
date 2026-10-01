@@ -1,0 +1,16 @@
+{
+  "name": "whatsapp-engine",
+  "version": "1.0.0",
+  "description": "Motor de WhatsApp con Baileys y Express para Webhook",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@whiskeysockets/baileys": "^7.0.0-rc14",
+    "express": "^5.2.1"
+  }
+}
