@@ -8,6 +8,8 @@ app.use(express.json());
 
 const PHP_WEBHOOK_URL = process.env.PHP_WEBHOOK_URL || 'https://nuvaistudio.com/crm/api/whatsapp_webhook.php';
 const MONGO_URI = process.env.MONGO_URI;
+// Cargar la clave secreta desde las variables de entorno
+const WEBHOOK_SECRET_KEY = process.env.WEBHOOK_SECRET_KEY || '';
 
 // Variable global para almacenar la instancia del socket de Baileys
 let sock = null;
@@ -132,16 +134,13 @@ async function connectToWhatsApp() {
 
         if (!text.trim()) continue;
 
-        // Extraer preferiblemente el JID original sin perder la estructura (soporta LID o Phone JID)
         const rawJid = msg.key.remoteJid || '';
         
-        // Extraer número de teléfono si existe un campo secundario o limpiar el JID principal
         let fromNumber = rawJid;
         if (msg.key.participant) {
           fromNumber = msg.key.participant;
         }
 
-        // Si es un JID telefónico estándar (@s.whatsapp.net), extraer solo dígitos
         if (fromNumber.includes('@s.whatsapp.net')) {
           fromNumber = fromNumber.replace(/@.*$/, '').replace(/[^0-9]/g, '');
         } else if (!fromNumber.includes('@')) {
@@ -156,7 +155,7 @@ async function connectToWhatsApp() {
 
         const safeData = {
           id: msg.key.id || `msg_${Date.now()}`,
-          from: fromNumber, // Envía el número real o el JID completo si es LID
+          from: fromNumber,
           rawJid: rawJid,
           name: msg.pushName && msg.pushName !== '-' ? msg.pushName : 'Usuario',
           text: text.trim(),
@@ -231,9 +230,7 @@ app.post('/send-message', async (req, res) => {
     if (sock) {
       let formattedJid = to.trim();
 
-      // Formateo dinámico del JID
       if (!formattedJid.includes('@')) {
-        // Si son solo números, añadir dominio estándar de WhatsApp
         const cleanNumber = formattedJid.replace(/[^0-9]/g, '');
         formattedJid = `${cleanNumber}@s.whatsapp.net`;
       }
@@ -250,11 +247,21 @@ app.post('/send-message', async (req, res) => {
   }
 });
 
+// Envió a PHP con encabezado de autenticación seguro
 async function forwardToPhp(data) {
   try {
+    const headers = { 
+      'Content-Type': 'application/json' 
+    };
+
+    // Agregar el encabezado X-Api-Key si está configurado en las variables de entorno
+    if (WEBHOOK_SECRET_KEY) {
+      headers['X-Api-Key'] = WEBHOOK_SECRET_KEY;
+    }
+
     const response = await fetch(PHP_WEBHOOK_URL, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: headers,
       body: JSON.stringify(data),
       signal: AbortSignal.timeout(8000)
     });
