@@ -1,13 +1,11 @@
-const { default: makeWASocket, DisconnectReason } = require('@whiskeysockets/baileys');
+const { default: makeWASocket, BufferJSON, initAuthCreds, proto, DisconnectReason } = require('@whiskeysockets/baileys');
 const qrcode = require('qrcode-terminal');
 const express = require('express');
 const mongoose = require('mongoose');
-const { useMongoDBAuthState } = require('baileys-mongodb-auth');
 
 const app = express();
 app.use(express.json());
 
-// Variables de entorno
 const PHP_WEBHOOK_URL = process.env.PHP_WEBHOOK_URL || 'https://nuvaistudio.com/crm/api/whatsapp_webhook.php';
 const MONGO_URI = process.env.MONGO_URI;
 
@@ -15,17 +13,76 @@ const MONGO_URI = process.env.MONGO_URI;
 let sock = null;
 
 // ==========================================
-// 1. MOTOR DE BAILEYS (Persistencia en MongoDB)
+// ADAPTADOR NATIVO DE AUTENTICACIÓN PARA MONGODB
+// ==========================================
+async function useMongoDBAuthState(collection) {
+  const writeData = async (data, id) => {
+    const json = JSON.stringify(data, BufferJSON.replacer);
+    await collection.updateOne(
+      { _id: id },
+      { $set: { value: json } },
+      { upsert: true }
+    );
+  };
+
+  const readData = async (id) => {
+    const doc = await collection.findOne({ _id: id });
+    if (doc && doc.value) {
+      return JSON.parse(doc.value, BufferJSON.reviver);
+    }
+    return null;
+  };
+
+  const removeData = async (id) => {
+    await collection.deleteOne({ _id: id });
+  };
+
+  const creds = (await readData('creds')) || initAuthCreds();
+
+  return {
+    state: {
+      creds,
+      keys: {
+        get: async (type, ids) => {
+          const data = {};
+          await Promise.all(
+            ids.map(async (id) => {
+              let value = await readData(`${type}-${id}`);
+              if (type === 'app-state-sync-key' && value) {
+                value = proto.Message.AppStateSyncKeyData.fromObject(value);
+              }
+              data[id] = value;
+            })
+          );
+          return data;
+        },
+        set: async (data) => {
+          const tasks = [];
+          for (const category in data) {
+            for (const id in data[category]) {
+              const value = data[category][id];
+              const key = `${category}-${id}`;
+              tasks.push(value ? writeData(value, key) : removeData(key));
+            }
+          }
+          await Promise.all(tasks);
+        }
+      }
+    },
+    saveCreds: () => writeData(creds, 'creds')
+  };
+}
+
+// ==========================================
+// 1. MOTOR DE BAILEYS (Conexión MongoDB)
 // ==========================================
 async function connectToWhatsApp() {
   try {
-    // Validar variable de entorno
     if (!MONGO_URI) {
       console.error('❌ Error: La variable MONGO_URI no está configurada en Render.');
       return;
     }
 
-    // Conectar a MongoDB Atlas si no hay conexión activa
     if (mongoose.connection.readyState === 0) {
       await mongoose.connect(MONGO_URI);
       console.log('✅ Conectado exitosamente a MongoDB Atlas');
@@ -67,7 +124,7 @@ async function connectToWhatsApp() {
       if (m.type !== 'notify') return;
 
       for (const msg of m.messages) {
-        if (msg.key.fromMe) continue; // Ignorar mis propios mensajes
+        if (msg.key.fromMe) continue;
 
         const text = msg.message?.conversation 
           || msg.message?.extendedTextMessage?.text 
@@ -106,7 +163,6 @@ async function connectToWhatsApp() {
 // 2. ENDPOINTS EXPRESS
 // ==========================================
 
-// Endpoint de prueba por cURL / Webhook manual
 app.post('/webhook', (req, res) => {
   try {
     const payload = req.body;
@@ -145,7 +201,6 @@ app.post('/webhook', (req, res) => {
   }
 });
 
-// Endpoint para que el CRM PHP envíe mensajes a WhatsApp
 app.post('/send-message', async (req, res) => {
   try {
     const { to, text } = req.body;
@@ -170,7 +225,6 @@ app.post('/send-message', async (req, res) => {
   }
 });
 
-// Reenvío de datos hacia el CRM en PHP
 async function forwardToPhp(data) {
   try {
     const response = await fetch(PHP_WEBHOOK_URL, {
@@ -188,7 +242,6 @@ async function forwardToPhp(data) {
   }
 }
 
-// Iniciar servidor y motor de Baileys
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`Servidor de Engine escuchando en el puerto ${PORT}`);
