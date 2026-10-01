@@ -219,34 +219,52 @@ app.post('/webhook', (req, res) => {
 
 app.post('/send-message', async (req, res) => {
   try {
-    const { to, text } = req.body;
+    const { to, text, imageUrl, caption } = req.body;
 
-    if (!to || !text) {
-      return res.status(400).json({ error: 'Parámetros obligatorios: to y text' });
+    // Validación: Se requiere un destinatario ('to') y al menos un mensaje ('text' o 'imageUrl')
+    if (!to || (!text && !imageUrl)) {
+      return res.status(400).json({ 
+        error: 'Debes proporcionar "to" y al menos uno de los campos: "text" o "imageUrl"' 
+      });
     }
 
-    console.log(`[Outbound] Enviando respuesta a ${to}: "${text}"`);
+    if (!sock) {
+      return res.status(503).json({ error: 'Sesión de WhatsApp no inicializada aún en Engine' });
+    }
 
-    if (sock) {
-      let formattedJid = to.trim();
+    // Formatear el JID para Baileys
+    let formattedJid = to.trim();
+    if (!formattedJid.includes('@')) {
+      const cleanNumber = formattedJid.replace(/[^0-9]/g, '');
+      formattedJid = `${cleanNumber}@s.whatsapp.net`;
+    }
 
-      if (!formattedJid.includes('@')) {
-        const cleanNumber = formattedJid.replace(/[^0-9]/g, '');
-        formattedJid = `${cleanNumber}@s.whatsapp.net`;
-      }
+    // 📸 1. SI ES UNA IMAGEN
+    if (imageUrl) {
+      console.log(`[Outbound Image] Enviando imagen a ${formattedJid}: ${imageUrl}`);
+      
+      await sock.sendMessage(formattedJid, {
+        image: { url: imageUrl },
+        caption: caption || text || ''
+      });
 
+      return res.status(200).json({ status: 'sent', type: 'image', to: formattedJid });
+    }
+
+    // 💬 2. SI ES SOLO TEXTO
+    if (text) {
+      console.log(`[Outbound Text] Enviando mensaje a ${formattedJid}: "${text}"`);
+      
       await sock.sendMessage(formattedJid, { text: text });
-      return res.status(200).json({ status: 'sent', to: formattedJid });
-    }
 
-    res.status(503).json({ error: 'Sesión de WhatsApp no inicializada aún en Engine' });
+      return res.status(200).json({ status: 'sent', type: 'text', to: formattedJid });
+    }
 
   } catch (error) {
     console.error('Error en /send-message:', error.message);
     res.status(500).json({ error: error.message });
   }
 });
-
 // Envió a PHP con encabezado de autenticación seguro
 async function forwardToPhp(data) {
   try {
