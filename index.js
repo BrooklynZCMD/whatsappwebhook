@@ -132,8 +132,21 @@ async function connectToWhatsApp() {
 
         if (!text.trim()) continue;
 
-        const fromRaw = msg.key.remoteJid || '';
-        const fromNumber = fromRaw.replace(/@.*$/, '').replace(/[^0-9]/g, '');
+        // Extraer preferiblemente el JID original sin perder la estructura (soporta LID o Phone JID)
+        const rawJid = msg.key.remoteJid || '';
+        
+        // Extraer número de teléfono si existe un campo secundario o limpiar el JID principal
+        let fromNumber = rawJid;
+        if (msg.key.participant) {
+          fromNumber = msg.key.participant;
+        }
+
+        // Si es un JID telefónico estándar (@s.whatsapp.net), extraer solo dígitos
+        if (fromNumber.includes('@s.whatsapp.net')) {
+          fromNumber = fromNumber.replace(/@.*$/, '').replace(/[^0-9]/g, '');
+        } else if (!fromNumber.includes('@')) {
+          fromNumber = fromNumber.replace(/[^0-9]/g, '');
+        }
 
         let timestamp = msg.messageTimestamp;
         if (typeof timestamp === 'object' && timestamp !== null) {
@@ -143,7 +156,8 @@ async function connectToWhatsApp() {
 
         const safeData = {
           id: msg.key.id || `msg_${Date.now()}`,
-          from: fromNumber,
+          from: fromNumber, // Envía el número real o el JID completo si es LID
+          rawJid: rawJid,
           name: msg.pushName && msg.pushName !== '-' ? msg.pushName : 'Usuario',
           text: text.trim(),
           timestamp: timestamp
@@ -177,7 +191,10 @@ app.post('/webhook', (req, res) => {
     const messageId = payload.id || payload.key?.id || payload.message?.id || `msg_${Date.now()}`;
     let from = payload.from || payload.key?.remoteJid || '';
     if (!from) return;
-    from = from.replace(/@.*$/, '').replace(/[^0-9]/g, '');
+
+    if (from.includes('@s.whatsapp.net')) {
+      from = from.replace(/@.*$/, '').replace(/[^0-9]/g, '');
+    }
 
     let timestamp = payload.timestamp;
     if (typeof timestamp === 'object' && timestamp !== null) {
@@ -212,7 +229,15 @@ app.post('/send-message', async (req, res) => {
     console.log(`[Outbound] Enviando respuesta a ${to}: "${text}"`);
 
     if (sock) {
-      const formattedJid = to.includes('@s.whatsapp.net') ? to : `${to}@s.whatsapp.net`;
+      let formattedJid = to.trim();
+
+      // Formateo dinámico del JID
+      if (!formattedJid.includes('@')) {
+        // Si son solo números, añadir dominio estándar de WhatsApp
+        const cleanNumber = formattedJid.replace(/[^0-9]/g, '');
+        formattedJid = `${cleanNumber}@s.whatsapp.net`;
+      }
+
       await sock.sendMessage(formattedJid, { text: text });
       return res.status(200).json({ status: 'sent', to: formattedJid });
     }
