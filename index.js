@@ -1,5 +1,4 @@
 const express = require('express');
-const axios = require('axios'); // Asegúrate de tener instalado axios: npm install axios
 const app = express();
 
 app.use(express.json());
@@ -19,7 +18,7 @@ app.post('/webhook', (req, res) => {
       return;
     }
 
-    // 3. Ignorar mensajes enviados por el propio bot para evitar bucles infinitos
+    // 3. Ignorar mensajes salientes enviados por el propio bot (evita bucles)
     if (payload.fromMe || payload.key?.fromMe) {
       return;
     }
@@ -36,12 +35,11 @@ app.post('/webhook', (req, res) => {
       || payload.message?.id 
       || `msg_${Date.now()}`;
 
-    // 6. Normalizar remitente (limpieza de JID a número de teléfono limpio)
+    // 6. Normalizar remitente (limpieza de JID a número telefónico puro)
     let from = payload.from || payload.key?.remoteJid || '';
     if (!from) {
       return;
     }
-    // Deja solo los números limpios sin el dominio @s.whatsapp.net o @lid
     from = from.replace(/@.*$/, '').replace(/[^0-9]/g, '');
 
     // 7. Normalizar el Timestamp
@@ -51,7 +49,7 @@ app.post('/webhook', (req, res) => {
     }
     timestamp = timestamp || Math.floor(Date.now() / 1000);
 
-    // 8. Estructura limpia lista para tu script en PHP
+    // 8. Estructura limpia para el script PHP
     const safeData = {
       id: messageId,
       from: from,
@@ -60,9 +58,9 @@ app.post('/webhook', (req, res) => {
       timestamp: timestamp
     };
 
-    console.log(`[Forwarding] Enviando a https://nuvaistudio.com/crm/api/whatsapp_webhook.php ->`, safeData);
+    console.log(`[Forwarding] Reenviando a PHP (${PHP_WEBHOOK_URL}):`, safeData);
 
-    // 9. Reenviar los datos de forma asíncrona a tu script PHP
+    // 9. Reenviar los datos de forma asíncrona a tu script PHP usando fetch nativo
     forwardToPhp(safeData);
 
   } catch (error) {
@@ -70,15 +68,21 @@ app.post('/webhook', (req, res) => {
   }
 });
 
-// Función que reenvía los datos mediante POST a tu backend PHP
+// Función de reenvío con fetch nativo de Node.js (v18+)
 async function forwardToPhp(data) {
   try {
-    await axios.post(PHP_WEBHOOK_URL, data, {
+    const response = await fetch(PHP_WEBHOOK_URL, {
+      method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      timeout: 8000
+      body: JSON.stringify(data),
+      signal: AbortSignal.timeout(8000) // Timeout de 8 segundos
     });
+
+    if (!response.ok) {
+      console.error(`[PHP Error] El servidor PHP respondió con código de estado: ${response.status}`);
+    }
   } catch (error) {
-    console.error('Error al reenviar los datos a PHP:', error.response?.data || error.message);
+    console.error('Error al reenviar los datos a PHP:', error.message);
   }
 }
 
