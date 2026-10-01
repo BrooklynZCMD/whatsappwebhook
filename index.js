@@ -1,24 +1,96 @@
-const { default: makeWASocket, useMultiFileAuthState, DisconnectReason } = require('@whiskeysockets/baileys');
+const { default: makeWASocket, BufferJSON, initAuthCreds, proto, DisconnectReason } = require('@whiskeysockets/baileys');
 const qrcode = require('qrcode-terminal');
 const express = require('express');
+const mysql = require('mysql2/promise');
 
 const app = express();
 app.use(express.json());
 
 const PHP_WEBHOOK_URL = process.env.PHP_WEBHOOK_URL || 'https://nuvaistudio.com/crm/api/whatsapp_webhook.php';
 
+// Pool de conexión a MySQL
+const dbPool = mysql.createPool({
+  host: process.env.DB_HOST || 'server62.shared.spaceship.host',
+  user: process.env.DB_USER || 'dkzboynbfh_admin',
+  password: process.env.DB_PASSWORD,
+  database: process.env.DB_NAME || 'dkzboynbfh_crm_db',
+  port: 3306,
+  waitForConnections: true,
+  connectionLimit: 10
+});
+
 // Variable global para almacenar la instancia del socket de Baileys
 let sock = null;
 
 // ==========================================
-// 1. MOTOR DE BAILEYS (Conexión real con WhatsApp + QR)
+// ADAPTADOR DE AUTENTICACIÓN MYSQL
+// ==========================================
+async function useMySQLAuthState() {
+  const writeData = async (data, id) => {
+    const json = JSON.stringify(data, BufferJSON.replacer);
+    await dbPool.query(
+      'INSERT INTO whatsapp_auth (id, value) VALUES (?, ?) ON DUPLICATE KEY UPDATE value = VALUES(value)',
+      [id, json]
+    );
+  };
+
+  const readData = async (id) => {
+    const [rows] = await dbPool.query('SELECT value FROM whatsapp_auth WHERE id = ?', [id]);
+    if (rows.length > 0) {
+      return JSON.parse(rows[0].value, BufferJSON.reviver);
+    }
+    return null;
+  };
+
+  const removeData = async (id) => {
+    await dbPool.query('DELETE FROM whatsapp_auth WHERE id = ?', [id]);
+  };
+
+  const creds = (await readData('creds')) || initAuthCreds();
+
+  return {
+    state: {
+      creds,
+      keys: {
+        get: async (type, ids) => {
+          const data = {};
+          await Promise.all(
+            ids.map(async (id) => {
+              let value = await readData(`${type}-${id}`);
+              if (type === 'app-state-sync-key' && value) {
+                value = proto.Message.AppStateSyncKeyData.fromObject(value);
+              }
+              data[id] = value;
+            })
+          );
+          return data;
+        },
+        set: async (data) => {
+          const tasks = [];
+          for (const category in data) {
+            for (const id in data[category]) {
+              const value = data[category][id];
+              const key = `${category}-${id}`;
+              tasks.push(value ? writeData(value, key) : removeData(key));
+            }
+          }
+          await Promise.all(tasks);
+        }
+      }
+    },
+    saveCreds: () => writeData(creds, 'creds')
+  };
+}
+
+// ==========================================
+// 1. MOTOR DE BAILEYS (Persistencia en MySQL)
 // ==========================================
 async function connectToWhatsApp() {
-  const { state, saveCreds } = await useMultiFileAuthState('auth_info_baileys');
+  const { state, saveCreds } = await useMySQLAuthState();
 
   sock = makeWASocket({
     auth: state,
-    printQRInTerminal: true
+    printQRInTerminal: false
   });
 
   sock.ev.on('creds.update', saveCreds);
@@ -40,7 +112,7 @@ async function connectToWhatsApp() {
         connectToWhatsApp();
       }
     } else if (connection === 'open') {
-      console.log('✅ ¡CONEXIÓN ESTABLECIDA CON ÉXITO CON WHATSAPP!');
+      console.log('✅ ¡CONEXIÓN ESTABLECIDA CON ÉXITO Y GUARDADA EN MYSQL!');
     }
   });
 
@@ -170,5 +242,5 @@ async function forwardToPhp(data) {
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`Servidor de Engine escuchando en el puerto ${PORT}`);
-  connectToWhatsApp(); // <- Esto activa el escáner de QR y la conexión
+  connectToWhatsApp();
 });
