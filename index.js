@@ -175,7 +175,9 @@ async function connectToWhatsApp() {
 // ==========================================
 // 2. ENDPOINTS EXPRESS
 // ==========================================
-
+app.get('/ping', (req, res) => {
+  res.status(200).send('OK');
+});
 app.post('/webhook', (req, res) => {
   try {
     const payload = req.body;
