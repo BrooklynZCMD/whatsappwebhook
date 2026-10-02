@@ -221,25 +221,19 @@ app.post('/send-message', async (req, res) => {
   try {
     const { to, text, imageUrl, caption } = req.body;
 
-    // Validación: Se requiere un destinatario ('to') y al menos un mensaje ('text' o 'imageUrl')
     if (!to || (!text && !imageUrl)) {
-      return res.status(400).json({ 
-        error: 'Debes proporcionar "to" y al menos uno de los campos: "text" o "imageUrl"' 
-      });
+      return res.status(400).json({ error: 'Debes proporcionar "to" y "text" o "imageUrl"' });
     }
 
     if (!sock) {
-      return res.status(503).json({ error: 'Sesión de WhatsApp no inicializada aún en Engine' });
+      return res.status(503).json({ error: 'Sesión de WhatsApp no inicializada en Engine' });
     }
 
-    // Formatear el JID para Baileys
-    let formattedJid = to.trim();
-    if (!formattedJid.includes('@')) {
-      const cleanNumber = formattedJid.replace(/[^0-9]/g, '');
-      formattedJid = `${cleanNumber}@s.whatsapp.net`;
-    }
+    // 🔧 LIMPIEZA RIGUROSA DEL JID: Extraer únicamente dígitos
+    const cleanNumber = String(to).split('@')[0].replace(/[^0-9]/g, '');
+    const formattedJid = `${cleanNumber}@s.whatsapp.net`;
 
-    // 📸 1. SI ES UNA IMAGEN
+    // 📸 ENVIAR IMAGEN
     if (imageUrl) {
       console.log(`[Outbound Image] Enviando imagen a ${formattedJid}: ${imageUrl}`);
       
@@ -251,12 +245,12 @@ app.post('/send-message', async (req, res) => {
       return res.status(200).json({ status: 'sent', type: 'image', to: formattedJid });
     }
 
-    // 💬 2. SI ES SOLO TEXTO
+    // 💬 ENVIAR TEXTO
     if (text) {
       console.log(`[Outbound Text] Enviando mensaje a ${formattedJid}: "${text}"`);
       
       await sock.sendMessage(formattedJid, { text: text });
-
+      
       return res.status(200).json({ status: 'sent', type: 'text', to: formattedJid });
     }
 
