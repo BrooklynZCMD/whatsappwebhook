@@ -216,7 +216,6 @@ app.post('/webhook', (req, res) => {
     console.error('Error procesando webhook:', error.message);
   }
 });
-
 app.post('/send-message', async (req, res) => {
   try {
     const { to, text, imageUrl, caption } = req.body;
@@ -226,12 +225,15 @@ app.post('/send-message', async (req, res) => {
     }
 
     if (!sock) {
-      return res.status(503).json({ error: 'Sesión de WhatsApp no inicializada en Engine' });
+      return res.status(503).json({ error: 'Sesión de WhatsApp no inicializada aún en Engine' });
     }
 
-    // 🔧 LIMPIEZA RIGUROSA DEL JID: Extraer únicamente dígitos
-    const cleanNumber = String(to).split('@')[0].replace(/[^0-9]/g, '');
-    const formattedJid = `${cleanNumber}@s.whatsapp.net`;
+    // 🎯 Manejo Inteligente de JID: Si ya trae @lid o @s.whatsapp.net, úsalo directamente.
+    let formattedJid = String(to).trim();
+    if (!formattedJid.includes('@')) {
+      const cleanNumber = formattedJid.replace(/[^0-9]/g, '');
+      formattedJid = `${cleanNumber}@s.whatsapp.net`;
+    }
 
     // 📸 ENVIAR IMAGEN
     if (imageUrl) {
@@ -250,7 +252,7 @@ app.post('/send-message', async (req, res) => {
       console.log(`[Outbound Text] Enviando mensaje a ${formattedJid}: "${text}"`);
       
       await sock.sendMessage(formattedJid, { text: text });
-      
+
       return res.status(200).json({ status: 'sent', type: 'text', to: formattedJid });
     }
 
@@ -259,6 +261,7 @@ app.post('/send-message', async (req, res) => {
     res.status(500).json({ error: error.message });
   }
 });
+
 // Envió a PHP con encabezado de autenticación seguro
 async function forwardToPhp(data) {
   try {
